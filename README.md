@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI-Powered Image Style Fusion Generator 🎨
 
 This is a starter scaffold for your college project.
@@ -43,3 +44,6 @@ style_fusion_project/
 ├─ outputs/
 └─ gallery/
 ```
+=======
+# style_fusion
+>>>>>>> c56a79c9649fb726e2400c7c5f34c79d4177c6af
