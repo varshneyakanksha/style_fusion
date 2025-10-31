@@ -1,74 +1,89 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from PIL import Image
+from PIL import Image, ImageOps
 import torchvision.transforms as transforms
 import torchvision.models as models
 import copy
 
+# --------------------------
+# 🧠 Step 1: Basic Setup
+# --------------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+imsize = 128
 
-
-# Image pre-processing
-imsize = 512
 loader = transforms.Compose([
     transforms.Resize((imsize, imsize)),
-    transforms.ToTensor()])
-
+    transforms.ToTensor()
+])
 unloader = transforms.ToPILImage()
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def image_loader(image_file, imsize=512):
+# --------------------------
+# 🖼️ Step 2: Load and Preprocess Image
+# --------------------------
+def image_loader(image_file, imsize=256):
     image = Image.open(image_file).convert("RGB")
-    loader = transforms.Compose([
-        transforms.Resize((imsize, imsize)),  # force same size for all images
-        transforms.ToTensor()
-    ])
+    image = ImageOps.fit(image, (128, 128), method=Image.Resampling.BICUBIC)
+
     image = loader(image).unsqueeze(0)
     return image.to(device, torch.float)
 
-
-
-# Load VGG19 model
+# --------------------------
+# 🧩 Step 3: Normalization for VGG
+# --------------------------
 cnn = models.vgg19(weights=models.VGG19_Weights.DEFAULT).features.to(device).eval()
+cnn_normalization_mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
+cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225]).to(device)
 
-# Content loss
+class Normalization(nn.Module):
+    def __init__(self, mean, std):
+        super(Normalization, self).__init__()
+        self.mean = torch.tensor(mean).view(-1, 1, 1)
+        self.std = torch.tensor(std).view(-1, 1, 1)
+    def forward(self, img):
+        return (img - self.mean) / self.std
+
+# --------------------------
+# 🧱 Step 4: Content + Style Loss
+# --------------------------
 class ContentLoss(nn.Module):
     def __init__(self, target):
         super(ContentLoss, self).__init__()
         self.target = target.detach()
-    def forward(self, x):
-        self.loss = nn.functional.mse_loss(x, self.target)
-        return x
-    
-def gram_matrix(input):
-    a, b, c, d = input.size()  # a=batch size, b=channels, (c,d)=feature map size
-    features = input.view(a * b, c * d)  # reshape
-    G = torch.mm(features, features.t())  # Gram matrix
-    return G.div(a * b * c * d)  # normalize
-
-
-# Style loss
-class StyleLoss(nn.Module):
-    def __init__(self, target_features):
-        super(StyleLoss, self).__init__()
-        self.target = gram_matrix(target_features).detach()
-
     def forward(self, input):
-        G = gram_matrix(input)
-        self.loss = nn.functional.mse_loss(G, self.target)
+        self.loss = nn.functional.mse_loss(input, self.target)
         return input
 
+def gram_matrix(input):
+    a, b, c, d = input.size()
+    features = input.view(a * b, c * d)
+    G = torch.mm(features, features.t())
+    return G.div(a * b * c * d)
 
+class StyleLoss(nn.Module):
+    def __init__(self, target_feature):
+        super(StyleLoss, self).__init__()
+        self.target = gram_matrix(target_feature).detach()
+    def forward(self, input):
+        G = gram_matrix(input)
+        # Align matrix sizes
+        min_size = min(G.size(0), self.target.size(0))
+        G = G[:min_size, :min_size]
+        target = self.target[:min_size, :min_size]
+        self.loss = nn.functional.mse_loss(G, target)
+        return input
 
-# Build model with losses
+# --------------------------
+# 🏗️ Step 5: Build Style Model
+# --------------------------
 def get_style_model_and_losses(cnn, style_img, content_img):
     cnn = copy.deepcopy(cnn)
+    normalization = Normalization(cnn_normalization_mean, cnn_normalization_std).to(device)
 
     content_losses = []
     style_losses = []
 
-    model = nn.Sequential()
+    model = nn.Sequential(normalization)
     i = 0
     for layer in cnn.children():
         if isinstance(layer, nn.Conv2d):
@@ -98,37 +113,39 @@ def get_style_model_and_losses(cnn, style_img, content_img):
             model.add_module("style_loss", style_loss)
             style_losses.append(style_loss)
 
-        if name == "conv_4":  # stop early
+        if name == "conv_4":
             break
 
     return model, style_losses, content_losses
 
-
-# Run style transfer
-def run_style_transfer(content_img, style_img, num_steps=200, style_weight=1e6, content_weight=1):
+# --------------------------
+# ⚙️ Step 6: Run Style Transfer
+# --------------------------
+def run_style_transfer(content_img, style_img, num_steps=50, style_weight=1e5, content_weight=1):
+    print("🚀 Fast style transfer started...")
+    
+    # CNN model and losses
     model, style_losses, content_losses = get_style_model_and_losses(cnn, style_img, content_img)
-    input_img = content_img.clone()
+    
+    input_img = content_img.clone().requires_grad_(True)
+    optimizer = optim.Adam([input_img], lr=0.02)  # 🔹 Adam = faster
+    
+    for step in range(num_steps):
+        optimizer.zero_grad()
+        model(input_img)
+        
+        style_score = sum(sl.loss for sl in style_losses)
+        content_score = sum(cl.loss for cl in content_losses)
+        
+        loss = style_score * style_weight + content_score * content_weight
+        loss.backward(retain_graph=True)
 
-    optimizer = optim.LBFGS([input_img.requires_grad_()])
-
-    print("Starting training...")
-    run = [0]
-    while run[0] <= num_steps:
-        def closure():
-            optimizer.zero_grad()
-            model(input_img)
-            style_score = 0
-            content_score = 0
-            for sl in style_losses:
-                style_score += sl.loss
-            for cl in content_losses:
-                content_score += cl.loss
-            loss = style_score * style_weight + content_score * content_weight
-            loss.backward()
-            run[0] += 1
-            return style_score + content_score
-        optimizer.step(closure)
-
+        optimizer.step()
+        
+        if step % 10 == 0:
+            print(f"Step {step}/{num_steps}, Total Loss: {loss.item():.4f}")
+    
+    # Convert tensor back to image
     output = input_img.detach().cpu().clone().squeeze(0)
     output = unloader(output)
     return output

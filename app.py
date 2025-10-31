@@ -1,86 +1,72 @@
 import streamlit as st
 from PIL import Image
-<<<<<<< HEAD
-
-st.set_page_config(page_title="AI Style Fusion", page_icon="🎨", layout="centered")
-st.title("🎨 Style Fusion Generator")
-
-st.write("Upload a *content image* and one or more *style images* to preview.")
-
-# Upload content image
-content_file = st.file_uploader("Upload Content Image", type=["jpg", "jpeg", "png"])
-
-# Upload style images (multiple allowed)
-style_files = st.file_uploader("Upload Style Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-
-if content_file:
-    content_img = Image.open(content_file)
-    st.image(content_img, caption="🖼 Content Image", use_column_width=True)
-
-if style_files:
-    st.write("🎭 Selected Style Images:")
-    for file in style_files:
-        style_img = Image.open(file)
-        st.image(style_img, caption=f"Style: {file.name}", use_column_width=True)
-
-# --- Button for demo ---
-if content_file and style_files:
-    if st.button("⚡ Generate Style Fusion"):
-        st.info("Running style transfer... (demo mode)")
-        st.success("✅ Output saved in outputs/ folder!")
-=======
 import os
 from style_transfer import image_loader, run_style_transfer
-IMG_SIZE = 512   # you can use 384/256 for faster runs on laptop
+import torch
 
-
-# Page setup
-st.set_page_config(page_title="AI Style Fusion", page_icon="🎨", layout="wide")
+# -------------------------------
+# 🎨 Streamlit Web App
+# -------------------------------
+st.set_page_config(page_title="AI Style Fusion", page_icon="🎨", layout="centered")
 
 st.title("🎨 AI-Powered Image Style Fusion Generator")
-st.write("Upload a content image and a style image to generate fused artwork.")
+st.markdown("Upload a **content image** and a **style image** to generate artistic fusion!")
 
-# Upload content image
-content_file = st.file_uploader("Upload Content file", type=["jpg", "jpeg", "png"])
-# Upload style image
-style_file = st.file_uploader("Upload Style file", type=["jpg", "jpeg", "png"])
+# -------------------------------
+# 🖼️ Upload Section
+# -------------------------------
+content_file = st.file_uploader("📸 Upload Content Image", type=["jpg", "jpeg", "png"])
+style_file = st.file_uploader("🎭 Upload Style Image", type=["jpg", "jpeg", "png"])
 
-# Show uploaded images
-if content_file:
-    content_file = Image.open(content_file)
-    st.image(content_file, caption="🖼️ Content file", use_container_width=True)
+# Preview uploaded images
+col1, col2 = st.columns(2)
+with col1:
+    if content_file:
+        content_image = Image.open(content_file)
+        st.image(content_image, caption="Content Image", use_container_width=True)
+with col2:
+    if style_file:
+        style_image = Image.open(style_file)
+        st.image(style_image, caption="Style Image", use_container_width=True)
 
-if style_file:
-    style_file = Image.open(style_file)
-    st.image(style_file, caption="Style file", use_container_width=True)
+# -------------------------------
+# ⚙️ Parameters
+# -------------------------------
+st.sidebar.header("⚙️ Style Transfer Settings")
+num_steps = st.sidebar.slider("Optimization Steps", 50, 500, 300, step=50)
+style_weight = st.sidebar.slider("Style Strength", 1_000.0, 1_000_000.0, 100_000.0, step=10_000.0)
 
-# Generate button
-if content_file and style_file:
-    if st.button("⚡ Generate Style Fusion"):
-        st.info("Running style transfer... Please wait ⏳")
+# -------------------------------
+# 🚀 Generate Button
+# -------------------------------
+if st.button("⚡ Generate Style Fusion"):
+    if content_file and style_file:
+        with st.spinner("Running style transfer... Please wait ⏳"):
+            try:
+                # Save temporary files
+                os.makedirs("temp", exist_ok=True)
+                content_path = os.path.join("temp", "content.jpg")
+                style_path = os.path.join("temp", "style.jpg")
+                Image.open(content_file).save(content_path)
+                Image.open(style_file).save(style_path)
 
-        # Save temporary files
-        content_path = "content_temp.jpg"
-        style_path = "style_temp.jpg"
-        content_file.save(content_path)
-        style_file.save(style_path)
+                # Load tensors
+                content_tensor = image_loader(content_path, imsize=256)
+                style_tensor = image_loader(style_path, imsize=256)
 
-        # Load tensors
-        content_tensor = image_loader(content_file)
-        style_tensor   = image_loader(style_file)
-        # If you allow multiple style uploads:
-        style_tensors  = [image_loader(s) for s in style_file]
+                # Run Style Transfer
+                output = run_style_transfer(content_tensor, style_tensor, num_steps=num_steps, style_weight=style_weight)
 
+                # Display output
+                st.success("✅ Style Fusion Completed Successfully!")
+                st.image(output, caption="🖼️ Fused Artistic Output", use_container_width=True)
 
-        # Run style transfer (backend)
-        output = run_style_transfer(content_tensor, style_tensor, num_steps=50)
+                # Save output
+                os.makedirs("outputs", exist_ok=True)
+                output.save("outputs/fused_result.jpg")
+                st.download_button("⬇️ Download Result", data=open("outputs/fused_result.jpg", "rb").read(), file_name="fused_result.jpg")
 
-        # Save output
-        os.makedirs("outputs", exist_ok=True)
-        output_path = os.path.join("outputs", "fused_result.jpg")
-        output.save(output_path)
-
-        # Show in UI
-        st.success("✅ Style Fusion Completed!")
-        st.image(output, caption=" Fused Output", use_container_width=True)
->>>>>>> bc615eb (Temporary local changes)
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+    else:
+        st.warning("⚠️ Please upload both content and style images first!")
